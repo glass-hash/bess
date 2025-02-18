@@ -52,14 +52,14 @@ def get_kernel_version():
         print(f"Error getting kernel version: {e}")
         return None
 
-def is_kernel_version_equal(version_to_check):
+def is_kernel_version_grtr_eq(version_to_check):
     """
     Check if current kernel version is equal to the specified version
     Example: is_kernel_version_equal("5.15.0")
     """
     current_version = get_kernel_version()
     if current_version:
-        return version.parse(current_version) == version.parse(version_to_check)
+        return version.parse(current_version) >= version.parse(version_to_check)
     return False
 
 def cmd(cmd, quiet=False, shell=False):
@@ -357,9 +357,9 @@ def build_dpdk():
         configure_dpdk()
 
     for f in glob.glob('%s/*.patch' % DEPS_DIR):
-        # skip the kernel 5.15 patch if we are not running kernel 5.15
+        # skip the kernel 5.15 patch if we running under v5.15
         is_5_15_patch = "linux_5_15.patch" in f
-        is_wrong_kernel = not is_kernel_version_equal("5.15.0")
+        is_wrong_kernel = not is_kernel_version_grtr_eq("5.15.0")
         if is_5_15_patch and is_wrong_kernel:
             continue
         print('Applying patch %s' % f)
