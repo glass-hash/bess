@@ -357,10 +357,10 @@ def build_dpdk():
         configure_dpdk()
 
     for f in glob.glob('%s/*.patch' % DEPS_DIR):
-        # skip the kernel 5.15 patch if we running under v5.15
-        is_5_15_patch = "linux_5_15.patch" in f
-        is_wrong_kernel = not is_kernel_version_grtr_eq("5.15.0")
-        if is_5_15_patch and is_wrong_kernel:
+        # skip the kernel 5.9 patch if we running under v5.9
+        is_5_9_patch = "linux_5_9.patch" in f
+        is_wrong_kernel = not is_kernel_version_grtr_eq("5.9.0")
+        if is_5_9_patch and is_wrong_kernel:
             continue
         print('Applying patch %s' % f)
         cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
