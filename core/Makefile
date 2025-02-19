@@ -78,7 +78,7 @@ endif
 
 # We always want these libraries to be dynamically linked even when the
 # user requests a static build.
-ALWAYS_DYN_LIBS := -lpcap -lpthread -ldl -lunwind -lgrpc++
+ALWAYS_DYN_LIBS := -lpcap -lpthread -ldl -lgrpc++
 # These libraries are not supported by pkg-config.
 ALWAYS_LIBS := -lgflags -lnuma
 # If pkg-config is available, we just need a list of the dependecies.
