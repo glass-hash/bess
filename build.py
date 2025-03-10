@@ -231,47 +231,6 @@ def set_config(filename, config, new_value):
 def is_kernel_header_installed():
     return os.path.isdir("/lib/modules/%s/build" % kernel_release)
 
-
-def check_kernel_headers():
-    # If kernel header is not available, do not attempt to build
-    # any components that require kernel.
-    if not is_kernel_header_installed():
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_EAL_IGB_UIO', 'n')
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_KNI_KMOD', 'n')
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_LIBRTE_KNI', 'n')
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_LIBRTE_PMD_KNI', 'n')
-
-
-def check_bnx():
-    if check_header('zlib.h', 'gcc') and check_c_lib('z'):
-        extra_libs.add('z')
-    else:
-        print(' - "zlib1g-dev" is not available. Disabling BNX2X PMD...')
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_LIBRTE_BNX2X_PMD', 'n')
-
-
-def check_mlx():
-    if check_header('infiniband/ib.h', 'gcc') and check_c_lib('mlx4') and \
-            check_c_lib('mlx5'):
-        extra_libs.add('ibverbs')
-        extra_libs.add('mlx4')
-        extra_libs.add('mlx5')
-    else:
-        print(' - "Mellanox OFED" is not available. '
-              'Disabling MLX4 and MLX5 PMDs...')
-        if check_header('infiniband/verbs.h', 'gcc'):
-            print('   NOTE: "libibverbs-dev" does exist, but it does not '
-                  'work with MLX PMDs. Instead download OFED from '
-                  'http://www.melloanox.com')
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_LIBRTE_MLX4_PMD', 'n')
-        set_config(DPDK_CONFIG, 'CONFIG_RTE_LIBRTE_MLX5_PMD', 'n')
-
-
-def generate_dpdk_extra_mk():
-    with open('core/extra.dpdk.mk', 'w') as fp:
-        fp.write('LIBS += %s\n' % ' '.join(['-l' + lib for lib in extra_libs]))
-
-
 def find_current_plugins():
     "return list of existing plugins"
     result = []
@@ -292,36 +251,6 @@ def generate_extra_mk():
         fp.write('LDFLAGS += %s\n' % ' '.join(ld_flags))
         for path in plugins:
             fp.write('PLUGINS += {}\n'.format(path))
-
-
-def download_dpdk(quiet=False):
-    if os.path.exists(DPDK_DIR):
-        if not quiet:
-            print('already downloaded to %s' % DPDK_DIR)
-        return
-    try:
-        cmd('mkdir -p %s' % DPDK_DIR)
-        url = '%s/%s.tar.gz' % (DPDK_URL, DPDK_VER)
-        print('Downloading %s ...  ' % url)
-        cmd('curl -s -L %s | tar zx -C %s --strip-components 1' %
-            (url, DPDK_DIR), shell=True)
-    except:
-        cmd('rm -rf %s' % (DPDK_DIR))
-        raise
-
-
-def configure_dpdk():
-    print('Configuring DPDK...')
-    cmd('make -C %s config T=%s' % (DPDK_DIR, DPDK_TARGET))
-
-    check_kernel_headers()
-    check_mlx()
-    generate_dpdk_extra_mk()
-
-    arch = os.getenv('CPU')
-    if arch:
-        print(' - Building DPDK with -march=%s' % arch)
-        set_config(DPDK_CONFIG, "CONFIG_RTE_MACHINE", arch)
 
 
 def makeflags():
@@ -346,30 +275,6 @@ def makeflags():
         result = '-%s' % result
     makeflags.result = result
     return result
-
-
-def build_dpdk():
-    check_essential()
-    download_dpdk(quiet=True)
-
-    # not configured yet?
-    if not os.path.exists('%s/build' % DPDK_DIR):
-        configure_dpdk()
-
-    for f in glob.glob('%s/*.patch' % DEPS_DIR):
-        # skip the kernel 5.9 patch if we running under v5.9
-        is_5_9_patch = "linux_5_9.patch" in f
-        is_wrong_kernel = not is_kernel_version_grtr_eq("5.9.0")
-        if is_5_9_patch and is_wrong_kernel:
-            continue
-        print('Applying patch %s' % f)
-        cmd('patch -d %s -N -p1 < %s || true' % (DPDK_DIR, f), shell=True)
-
-    print('Building DPDK...')
-    nproc = int(cmd('nproc', quiet=True))
-    cmd('make -C %s EXTRA_CFLAGS=%s %s' % (DPDK_DIR,
-                                           DPDK_CFLAGS,
-                                           makeflags()))
 
 
 def generate_protobuf_files():
@@ -418,15 +323,13 @@ def generate_protobuf_files():
 def build_bess():
     check_essential()
 
-    if not os.path.exists('%s/build' % DPDK_DIR):
-        build_dpdk()
-
     generate_protobuf_files()
 
     print('Building BESS daemon...')
     sys.stdout.flush()
     cmd('bin/bessctl daemon stop 2> /dev/null || true', shell=True)
     cmd('rm -f core/bessd')  # force relink as DPDK might have been rebuilt
+    # cmd('make -C core BESS_LINK_DYNAMIC=1 LDFLAGS="-L/usr/local/lib/x86_64-linux-gnu" bessd modules all_test %s' % makeflags())
     cmd('make -C core bessd modules all_test %s' % makeflags())
 
 
@@ -452,7 +355,6 @@ def build_kmod():
 
 
 def build_all():
-    build_dpdk()
     build_bess()
     build_kmod()
     print('Done.')
@@ -510,8 +412,6 @@ def main():
     parser = argparse.ArgumentParser(description='Build BESS')
     cmds = {
         'all': build_all,
-        'download_dpdk': download_dpdk,
-        'dpdk': build_dpdk,
         'bess': build_bess,
         'kmod': build_kmod,
         'clean': do_clean,
