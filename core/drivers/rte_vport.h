@@ -1,3 +1,4 @@
+// Copyright (c) 2014-2016, The Regents of the University of California.
 // Copyright (c) 2016-2017, Nefeli Networks, Inc.
 // All rights reserved.
 //
@@ -27,68 +28,23 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-syntax = "proto3";
+#ifndef BESS_DRIVERS_RTE_VPORT_H_
+#define BESS_DRIVERS_RTE_VPORT_H_
 
-package bess.pb;
+#include "../kmod/sn_common.h"
+#include "../port.h"
 
-message PCAPPortArg {
-  string dev = 1;
-}
+class RteVPort final : public Port {
+ public:
+  RteVPort() {}
+  void InitDriver() override;
 
-message PMDPortArg {
-  bool loopback = 1;
-  oneof port {
-    uint64 port_id = 2;
-    string pci = 3;
-    string vdev = 4;
-  }
+  CommandResponse Init(const bess::pb::RteVPortArg &arg);
+  void DeInit() override;
 
-  // See http://dpdk.org/doc/dts/test_plans/dual_vlan_test_plan.html
-  bool vlan_offload_rx_strip = 5;
-  bool vlan_offload_rx_filter = 6;
-  bool vlan_offload_rx_qinq = 7;
-}
+  int RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) override;
+  int SendPackets(queue_t qid, bess::Packet **pkts, int cnt) override;
 
-message UnixSocketPortArg {
-  /// Set the first character to "@" in place of \0 for abstract path
-  /// See manpage for unix(7).
-  string path = 1;
+};
 
-  /// Minimum RX polling interval for system calls, when *idle*.
-  /// Use a negative number for unthrottled polling. If unspecified or 0,
-  /// it is set to 50,000 (50 microseconds, or 20k polls per second)
-  int64 min_rx_interval_ns = 2;
-
-  /// If set, the port driver will send a confirmation once
-  /// the port is connected.  This lets pybess avoid a race during
-  /// testing.  See bessctl/test_utils.py for details.
-  bool confirm_connect = 3;
-}
-
-message VPortArg {
-  string ifname = 1;
-  oneof cpid {
-    string docker = 2;
-    int64 container_pid = 3;
-    string netns = 4;
-  }
-  repeated int64 rxq_cpus = 5;
-  uint64 tx_tci = 6;
-  uint64 tx_outer_tci = 7;
-  bool loopback = 8;
-  repeated string ip_addrs = 9;
-}
-
-message RteVPortArg {
-  string ifname = 1;
-  oneof cpid {
-    string docker = 2;
-    int64 container_pid = 3;
-    string netns = 4;
-  }
-  repeated int64 rxq_cpus = 5;
-  uint64 tx_tci = 6;
-  uint64 tx_outer_tci = 7;
-  bool loopback = 8;
-  repeated string ip_addrs = 9;
-}
+#endif  // BESS_DRIVERS_RTE_VPORT_H_

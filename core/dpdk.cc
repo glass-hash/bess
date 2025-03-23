@@ -110,17 +110,14 @@ class CmdLineOpts {
 };
 
 void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
+  (void) nonworker_corelist;
   CmdLineOpts rte_args{
       "bessd",
       "--master-lcore",
       std::to_string(RTE_MAX_LCORE - 1),
       "--lcore",
       std::to_string(RTE_MAX_LCORE - 1) + "@" + nonworker_corelist,
-      // Do not bother with /var/run/.rte_config and .rte_hugepage_info,
-      // since we don't want to interfere with other DPDK applications.
-      "--no-shconf",
-      // TODO(sangjin) switch to dynamic memory mode
-      "--legacy-mem",
+      "--proc-type=primary"
   };
 
   if (dpdk_mb_per_socket <= 0) {
@@ -132,7 +129,7 @@ void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
     // memory in advance. We allocate 512MB (this is shared among nodes).
     rte_args.Append({"-m", "512"});
   } else {
-    rte_args.Append({"--iova", (FLAGS_iova != "") ? FLAGS_iova : "pa"});
+    // rte_args.Append({"--iova", (FLAGS_iova != "") ? FLAGS_iova : "pa"});
 
     std::string opt_socket_mem = std::to_string(dpdk_mb_per_socket);
     for (int i = 1; i < NumNumaNodes(); i++) {
@@ -143,7 +140,7 @@ void init_eal(int dpdk_mb_per_socket, std::string nonworker_corelist) {
 
     // Unlink mapped hugepage files so that memory can be reclaimed as soon as
     // bessd terminates.
-    rte_args.Append({"--huge-unlink"});
+    // rte_args.Append({"--huge-unlink"});
   }
 
   // reset getopt()
