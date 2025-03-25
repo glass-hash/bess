@@ -48,13 +48,12 @@
 #include "../message.h"
 #include "../utils/format.h"
 
-#define STR_TOKEN_SIZE 128
+#define BURST_SIZE 32
 
-static const char *_MSG_POOL = "MSG_POOL";
-static const char *_SEC_2_PRI = "SEC_2_PRI";
-static const char *_PRI_2_SEC = "PRI_2_SEC";
+static const char *_RTE_VPORT_MSG_POOL = "RTE_VPORT_MSG_POOL";
+static const char *_RTE_VPORT_SHARED_RING = "RTE_VPORT_SHARED_RING";
 
-struct rte_ring *send_ring = NULL, *recv_ring = NULL;
+struct rte_ring *shared_ring = NULL;
 struct rte_mempool *message_pool = NULL;
 
 void RteVPort::InitDriver() {
@@ -62,11 +61,8 @@ void RteVPort::InitDriver() {
 
 void RteVPort::DeInit() {
     LOG(INFO) << "Entered RteVPort::DeInit";
-    if(send_ring) {
-        rte_ring_free(send_ring);
-    }
-    if(recv_ring) {
-        rte_ring_free(recv_ring);
+    if(shared_ring) {
+        rte_ring_free(shared_ring);
     }
     if(message_pool) {
         rte_mempool_free(message_pool);
@@ -77,14 +73,13 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   (void) arg;
   LOG(INFO) << "Entered RteVPort::Init";
   const unsigned flags = 0;
-  const unsigned ring_size = 64;
-  const unsigned pool_size = 1024;
+  const unsigned ring_size = 1024;
+  const unsigned pool_size = 4096;
   const unsigned pool_cache = 32;
   const unsigned priv_data_sz = 0;
-  send_ring = rte_ring_create(_PRI_2_SEC, ring_size, rte_socket_id(), flags);
-  recv_ring = rte_ring_create(_SEC_2_PRI, ring_size, rte_socket_id(), flags);
-  message_pool = rte_mempool_create(_MSG_POOL, pool_size,
-                                    STR_TOKEN_SIZE, pool_cache, priv_data_sz,
+  shared_ring = rte_ring_create(_RTE_VPORT_SHARED_RING, ring_size, rte_socket_id(), flags);
+  message_pool = rte_mempool_create(_RTE_VPORT_MSG_POOL, pool_size,
+                                    64, pool_cache, priv_data_sz,
                                     NULL, NULL, NULL, NULL,
                                     rte_socket_id(), flags);
   CommandResponse err;
@@ -93,15 +88,26 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
 
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void) qid;
-  (void) pkts;
   (void) max_cnt;
-  void *msg;
-  int ret = rte_ring_dequeue(recv_ring, &msg);
-  if(ret == 0) {
-      LOG(INFO) << "Received " << (char*) msg;
-      if (rte_ring_enqueue(send_ring, msg) < 0) {
-        printf("Failed to send message - message discarded\n");
+  void *pkt[BURST_SIZE] = {NULL};
+  int ret = rte_ring_dequeue_bulk(shared_ring, pkt, BURST_SIZE, NULL);
+  if(ret == BURST_SIZE) {
+      bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, 60);
+      if(!result) {
+        LOG(INFO) << "Could not allocate packets";
+        return 0;
       }
+      for (int i = 0; i < BURST_SIZE; i++) {
+          bess::Packet *p = pkts[i];
+          if(p) {
+              char *p_data = p->data();
+              rte_memcpy(p_data, pkt[i], 60);
+              pkts[i] = p;
+          }
+          // return the packet back to the shared mempool
+          rte_mempool_put(message_pool, pkt[i]);
+      }
+      return BURST_SIZE;
   }
   return 0;
 }
