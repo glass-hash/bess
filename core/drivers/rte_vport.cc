@@ -56,66 +56,66 @@ static const char *_RTE_VPORT_SHARED_RING = "RTE_VPORT_SHARED_RING";
 struct rte_ring *shared_ring = NULL;
 struct rte_mempool *message_pool = NULL;
 
-void RteVPort::InitDriver() {
-}
+void RteVPort::InitDriver() {}
 
 void RteVPort::DeInit() {
-    LOG(INFO) << "Entered RteVPort::DeInit";
-    if(shared_ring) {
-        rte_ring_free(shared_ring);
-    }
-    if(message_pool) {
-        rte_mempool_free(message_pool);
-    }
+  LOG(INFO) << "Entered RteVPort::DeInit";
+  if (shared_ring) {
+    rte_ring_free(shared_ring);
+  }
+  if (message_pool) {
+    rte_mempool_free(message_pool);
+  }
 }
 
 CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
-  (void) arg;
+  (void)arg;
   LOG(INFO) << "Entered RteVPort::Init";
   const unsigned flags = 0;
   const unsigned ring_size = 1024;
   const unsigned pool_size = 4096;
-  const unsigned pool_cache = 32;
   const unsigned priv_data_sz = 0;
-  shared_ring = rte_ring_create(_RTE_VPORT_SHARED_RING, ring_size, rte_socket_id(), flags);
-  message_pool = rte_mempool_create(_RTE_VPORT_MSG_POOL, pool_size,
-                                    64, pool_cache, priv_data_sz,
-                                    NULL, NULL, NULL, NULL,
-                                    rte_socket_id(), flags);
+  shared_ring = rte_ring_create(_RTE_VPORT_SHARED_RING, ring_size,
+                                rte_socket_id(), flags);
+  message_pool =
+      rte_mempool_create(_RTE_VPORT_MSG_POOL, pool_size, 64, 0, priv_data_sz,
+                         NULL, NULL, NULL, NULL, rte_socket_id(), flags);
   CommandResponse err;
   return err;
 }
 
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
-  (void) qid;
-  (void) max_cnt;
+  (void)qid;
+  (void)max_cnt;
   void *pkt[BURST_SIZE] = {NULL};
   int ret = rte_ring_dequeue_bulk(shared_ring, pkt, BURST_SIZE, NULL);
-  if(ret == BURST_SIZE) {
-      bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, 60);
-      if(!result) {
-        LOG(INFO) << "Could not allocate packets";
-        return 0;
+  if (ret == BURST_SIZE) {
+    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, 60);
+    if (!result) {
+      LOG(INFO) << "Could not allocate packets";
+      return 0;
+    }
+    for (int i = 0; i < BURST_SIZE; i++) {
+      bess::Packet *p = pkts[i];
+      if (p) {
+        char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
+        p->set_data_off(SNBUF_HEADROOM);
+        p->set_total_len(60);
+        p->set_data_len(60);
+        rte_memcpy(ptr, pkt[i], 60);
+        // bess::utils::CopyInlined(ptr, pkt[i], 60);
       }
-      for (int i = 0; i < BURST_SIZE; i++) {
-          bess::Packet *p = pkts[i];
-          if(p) {
-              char *p_data = p->data();
-              rte_memcpy(p_data, pkt[i], 60);
-              pkts[i] = p;
-          }
-          // return the packet back to the shared mempool
-          rte_mempool_put(message_pool, pkt[i]);
-      }
-      return BURST_SIZE;
+    }
+    rte_mempool_put_bulk(message_pool, pkt, BURST_SIZE);
+    return BURST_SIZE;
   }
   return 0;
 }
 
 int RteVPort::SendPackets(queue_t qid, bess::Packet **pkts, int cnt) {
-  (void) qid;
-  (void) pkts;
-  (void) cnt;
+  (void)qid;
+  (void)pkts;
+  (void)cnt;
   return 0;
 }
 
