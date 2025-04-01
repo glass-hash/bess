@@ -99,14 +99,12 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
     }
     for (int i = 0; i < BURST_SIZE; i++) {
       bess::Packet *p = pkts[i];
-      if (p) {
-        char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
-        p->set_data_off(SNBUF_HEADROOM);
-        p->set_total_len(60);
-        p->set_data_len(60);
-        rte_memcpy(ptr, client_pkts[i], 60);
-        // bess::utils::CopyInlined(ptr, pkt[i], 60);
-      }
+      char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
+      p->set_data_off(SNBUF_HEADROOM);
+      p->set_total_len(60);
+      p->set_data_len(60);
+      rte_memcpy(ptr, client_pkts[i], 60);
+      // bess::utils::CopyInlined(ptr, pkt[i], 60);
     }
     rte_mempool_put_bulk(message_pool, client_pkts, BURST_SIZE);
     return BURST_SIZE;
