@@ -63,6 +63,7 @@ void RteVPort::DeInit() {
   if (shared_ring) {
     rte_ring_free(shared_ring);
   }
+
   if (message_pool) {
     rte_mempool_free(message_pool);
   }
@@ -87,8 +88,9 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)qid;
   (void)max_cnt;
-  void *pkt[BURST_SIZE] = {NULL};
-  int ret = rte_ring_dequeue_bulk(shared_ring, pkt, BURST_SIZE, NULL);
+
+  void *client_pkts[BURST_SIZE] = {NULL};
+  int ret = rte_ring_dequeue_bulk(shared_ring, client_pkts, BURST_SIZE, NULL);
   if (ret == BURST_SIZE) {
     bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, 60);
     if (!result) {
@@ -102,11 +104,11 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
         p->set_data_off(SNBUF_HEADROOM);
         p->set_total_len(60);
         p->set_data_len(60);
-        rte_memcpy(ptr, pkt[i], 60);
+        rte_memcpy(ptr, client_pkts[i], 60);
         // bess::utils::CopyInlined(ptr, pkt[i], 60);
       }
     }
-    rte_mempool_put_bulk(message_pool, pkt, BURST_SIZE);
+    rte_mempool_put_bulk(message_pool, client_pkts, BURST_SIZE);
     return BURST_SIZE;
   }
   return 0;
