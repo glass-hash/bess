@@ -45,6 +45,8 @@ class RteVPort final : public Port {
   int RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) override;
   int SendPackets(queue_t qid, bess::Packet **pkts, int cnt) override;
 
+ private:
+  uint8_t *test_pkt;
 };
 
 #endif  // BESS_DRIVERS_RTE_VPORT_H_

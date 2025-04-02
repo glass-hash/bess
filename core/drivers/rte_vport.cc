@@ -48,6 +48,11 @@
 #include "../message.h"
 #include "../utils/format.h"
 
+#include <rte_flow.h>
+
+struct rte_ether_addr src_mac = {{0xb4, 0x96, 0x91, 0xa4, 0x02, 0xe9}};
+struct rte_ether_addr dst_mac = {{0xb4, 0x96, 0x91, 0xa4, 0x04, 0x21}};
+
 #define BURST_SIZE 32
 
 static const char *_RTE_VPORT_MSG_POOL = "RTE_VPORT_MSG_POOL";
@@ -67,6 +72,62 @@ void RteVPort::DeInit() {
   if (message_pool) {
     rte_mempool_free(message_pool);
   }
+
+  if (test_pkt) {
+    free(test_pkt);
+  }
+}
+
+uint8_t *generate_pkt(uint16_t pkt_size) {
+  uint8_t *pkt_buf = (uint8_t *)malloc(pkt_size * sizeof(uint8_t));
+  if (pkt_buf == NULL) {
+    std::cerr << "Failed to allocate memory from malloc" << std::endl;
+    exit(0);
+  }
+
+  uint16_t pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN;
+
+  // Setup packet headers
+  struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)pkt_buf;
+  struct rte_ipv4_hdr *ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+  struct rte_udp_hdr *udp_hdr = (struct rte_udp_hdr *)(ip_hdr + 1);
+
+  // Ethernet header
+  eth_hdr->s_addr = src_mac;
+  eth_hdr->d_addr = dst_mac;
+  eth_hdr->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+
+  // IP header
+  ip_hdr->version_ihl = RTE_IPV4_VHL_DEF;
+  ip_hdr->type_of_service = 0;
+  ip_hdr->total_length =
+      rte_cpu_to_be_16(pkt_size_no_crc - sizeof(struct rte_ether_hdr));
+  ip_hdr->packet_id = 0;
+  ip_hdr->fragment_offset = 0;
+  ip_hdr->time_to_live = 64;
+  ip_hdr->next_proto_id = IPPROTO_UDP;
+  ip_hdr->src_addr = rte_cpu_to_be_32(0x0A000001);
+  ip_hdr->dst_addr = rte_cpu_to_be_32(0xC0A80000);
+  ip_hdr->hdr_checksum = 0;
+  ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
+
+  // UDP header
+  udp_hdr->src_port = rte_cpu_to_be_16(8080);
+  udp_hdr->dst_port = rte_cpu_to_be_16(80);
+  udp_hdr->dgram_len =
+      rte_cpu_to_be_16(pkt_size_no_crc - (sizeof(struct rte_ether_hdr) +
+                                          sizeof(struct rte_ipv4_hdr)));
+  udp_hdr->dgram_cksum = 0;
+
+  uint8_t *payload =
+      (uint8_t *)(((char *)udp_hdr) + sizeof(struct rte_udp_hdr));
+  uint64_t payload_size = pkt_size_no_crc - sizeof(struct rte_ether_hdr) -
+                          sizeof(struct rte_ipv4_hdr) -
+                          sizeof(struct rte_udp_hdr);
+  for (uint64_t i = 0; i < payload_size; ++i) {
+    payload[i] = 0xff;
+  }
+  return pkt_buf;
 }
 
 CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
@@ -81,14 +142,58 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   message_pool =
       rte_mempool_create(_RTE_VPORT_MSG_POOL, pool_size, 64, 0, priv_data_sz,
                          NULL, NULL, NULL, NULL, rte_socket_id(), flags);
+
+  test_pkt = generate_pkt(64);
   CommandResponse err;
   return err;
 }
 
+#ifdef RTE_VPORT_NO_COORD
+// In this case, we copy the same packet over and over in BESS and don't
+// communicate with the application cores. This will perform the best. Remember
+// in this case, you do not need to start any applications.
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)qid;
   (void)max_cnt;
-
+  bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, 60);
+  if (!result) {
+    LOG(INFO) << "Could not allocate packets";
+    return 0;
+  }
+  for (int i = 0; i < BURST_SIZE; i++) {
+    bess::Packet *p = pkts[i];
+    char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
+    rte_memcpy(ptr, test_pkt, 60);
+  }
+  return BURST_SIZE;
+}
+#elif RTE_VPORT_NO_COPY
+// In this case, we dequeue the packets but end up freeing them. There are cache
+// invalidtions happening between the application and the core where BESS runs.
+// We do not copy anything here and just send whatever BESS allocates. This will
+// perform the second best.
+int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
+  (void)qid;
+  (void)max_cnt;
+  void *client_pkts[BURST_SIZE] = {NULL};
+  int ret = rte_ring_dequeue_bulk(shared_ring, client_pkts, BURST_SIZE, NULL);
+  if (ret == BURST_SIZE) {
+    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, 60);
+    if (!result) {
+      LOG(INFO) << "Could not allocate packets";
+      return 0;
+    }
+    rte_mempool_put_bulk(message_pool, client_pkts, BURST_SIZE);
+    return BURST_SIZE;
+  }
+  return 0;
+}
+#else
+// In this case, we dequeue the packets, and copy them on the packets allocated
+// by BESS. This will perform the worst.
+int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
+  (void)qid;
+  (void)max_cnt;
   void *client_pkts[BURST_SIZE] = {NULL};
   int ret = rte_ring_dequeue_bulk(shared_ring, client_pkts, BURST_SIZE, NULL);
   if (ret == BURST_SIZE) {
@@ -100,17 +205,14 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
     for (int i = 0; i < BURST_SIZE; i++) {
       bess::Packet *p = pkts[i];
       char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
-      p->set_data_off(SNBUF_HEADROOM);
-      p->set_total_len(60);
-      p->set_data_len(60);
       rte_memcpy(ptr, client_pkts[i], 60);
-      // bess::utils::CopyInlined(ptr, pkt[i], 60);
     }
     rte_mempool_put_bulk(message_pool, client_pkts, BURST_SIZE);
     return BURST_SIZE;
   }
   return 0;
 }
+#endif
 
 int RteVPort::SendPackets(queue_t qid, bess::Packet **pkts, int cnt) {
   (void)qid;
