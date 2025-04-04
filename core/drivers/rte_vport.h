@@ -47,8 +47,10 @@ class RteVPort final : public Port {
 
  private:
   uint8_t *test_pkt;
+  uint16_t num_cores;
   uint16_t pkt_size;
   uint16_t copy_len;
+  uint16_t cur_core_ind;
 };
 
 #endif  // BESS_DRIVERS_RTE_VPORT_H_
