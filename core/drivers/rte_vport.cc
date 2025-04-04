@@ -202,22 +202,20 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
 // In this case, we dequeue the packets but end up freeing them. There are cache
 // invalidtions happening between the application and the core where BESS runs.
 // We do not copy anything here and just send whatever BESS allocates. This will
-// perform the second best.
+// perform the second best. This function assumes only one core.
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)qid;
   (void)max_cnt;
   void *client_pkts[BURST_SIZE] = {NULL};
-  for(uint16_t ind = 0; ind < num_cores; ind++) {
-      int ret = rte_ring_dequeue_bulk(shared_rings[ind], client_pkts, BURST_SIZE, NULL);
-      if (ret == BURST_SIZE) {
-        bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
-        if (!result) {
-          LOG(INFO) << "Could not allocate packets";
-          return 0;
-        }
-        rte_mempool_put_bulk(mempools[ind], client_pkts, BURST_SIZE);
-        return BURST_SIZE;
-      }
+  int ret = rte_ring_dequeue_bulk(shared_rings[0], client_pkts, BURST_SIZE, NULL);
+  if (ret == BURST_SIZE) {
+    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
+    if (!result) {
+      LOG(INFO) << "Could not allocate packets";
+      return 0;
+    }
+    rte_mempool_put_bulk(mempools[0], client_pkts, BURST_SIZE);
+    return BURST_SIZE;
   }
   return 0;
 }
