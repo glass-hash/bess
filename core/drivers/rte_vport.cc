@@ -87,6 +87,7 @@ uint8_t *generate_pkt(uint16_t pkt_size) {
     std::cerr << "Failed to allocate memory from malloc" << std::endl;
     exit(0);
   }
+  uint16_t pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN; // no crc
 
   // Setup packet headers
   struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)pkt_buf;
