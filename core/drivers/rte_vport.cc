@@ -134,7 +134,6 @@ uint8_t *generate_pkt(uint16_t pkt_size) {
 
 CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   num_cores = arg.num_cores();
-  LOG(INFO) << "Num cores = " << num_cores;
   pkt_size = arg.pkt_size();
   pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN; // no crc
   cur_core_ind = 0;
@@ -146,15 +145,13 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   shared_rings = (struct rte_ring **) malloc(num_cores * sizeof(struct rte_ring *));
   if(shared_rings == NULL) {
       LOG(FATAL) << "Memory allocation failed";
-      // TODO: Set error properly
-      return err;
+      return CommandFailure(ENOMEM, "shared_rings memory allocation failed");
   }
 
   mempools = (struct rte_mempool **) malloc(num_cores * sizeof(struct rte_mempool *));
   if(shared_rings == NULL) {
       LOG(FATAL) << "Memory allocation failed";
-      // TODO: Set error properly
-      return err;
+      return CommandFailure(ENOMEM, "mempools memory allocation failed");
   }
 
   for(uint16_t i = 0; i < num_cores; i++) {
@@ -164,13 +161,18 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
       shared_rings[i] = rte_ring_create(SHARED_RING_NAME, ring_size,
                                         rte_socket_id(),
                                         flags);
+      if(shared_rings[i] == NULL) {
+        return CommandFailure(ENOMEM, "rte_ring_create failed");
+      }
 
       char MEMPOOL_NAME[30];
       sprintf(MEMPOOL_NAME, "RTE_VPORT_MEMPOOL_%u", i);
       mempools[i] = rte_mempool_create(MEMPOOL_NAME, pool_size, pkt_size, 0,
                          priv_data_sz, NULL, NULL, NULL, NULL, rte_socket_id(),
                          flags);
-
+      if(mempools[i] == NULL) {
+        return CommandFailure(ENOMEM, "rte_mempools failed");
+      }
   }
 
   test_pkt = generate_pkt(pkt_size);
