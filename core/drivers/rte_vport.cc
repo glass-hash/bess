@@ -88,8 +88,6 @@ uint8_t *generate_pkt(uint16_t pkt_size) {
     exit(0);
   }
 
-  uint16_t pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN;
-
   // Setup packet headers
   struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)pkt_buf;
   struct rte_ipv4_hdr *ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
@@ -137,7 +135,7 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   num_cores = arg.num_cores();
   LOG(INFO) << "Num cores = " << num_cores;
   pkt_size = arg.pkt_size();
-  copy_len = pkt_size - 4; // no crc
+  pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN; // no crc
   cur_core_ind = 0;
   const unsigned flags = 0;
   const unsigned ring_size = 1024;
@@ -185,7 +183,7 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)qid;
   (void)max_cnt;
-  bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, copy_len);
+  bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
   if (!result) {
     LOG(INFO) << "Could not allocate packets";
     return 0;
@@ -193,7 +191,7 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   for (int i = 0; i < BURST_SIZE; i++) {
     bess::Packet *p = pkts[i];
     char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
-    rte_memcpy(ptr, test_pkt, copy_len);
+    rte_memcpy(ptr, test_pkt, pkt_size_no_crc);
   }
   return BURST_SIZE;
 }
@@ -209,7 +207,7 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   for(uint16_t ind = 0; ind < num_cores; ind++) {
       int ret = rte_ring_dequeue_bulk(shared_rings[ind], client_pkts, BURST_SIZE, NULL);
       if (ret == BURST_SIZE) {
-        bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, copy_len);
+        bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
         if (!result) {
           LOG(INFO) << "Could not allocate packets";
           return 0;
@@ -232,7 +230,7 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   int ret = rte_ring_dequeue_bulk(shared_rings[cur_core_ind], client_pkts, BURST_SIZE, NULL);
   // if the dequeue was successful, send them on
   if (ret == BURST_SIZE) {
-    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, copy_len);
+    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
     if (!result) {
       LOG(INFO) << "Could not allocate packets";
       return 0;
@@ -242,9 +240,9 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
       bess::Packet *p = pkts[i];
       char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
       p->set_data_off(SNBUF_HEADROOM);
-      p->set_total_len(copy_len);
-      p->set_data_len(copy_len);
-      rte_memcpy(ptr, client_pkts[i], copy_len);
+      p->set_total_len(pkt_size_no_crc);
+      p->set_data_len(pkt_size_no_crc);
+      rte_memcpy(ptr, client_pkts[i], pkt_size_no_crc);
     }
     // Return the pointers to the mempool
     rte_mempool_put_bulk(mempools[cur_core_ind], client_pkts, BURST_SIZE);

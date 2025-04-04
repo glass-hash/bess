@@ -49,7 +49,7 @@ class RteVPort final : public Port {
   uint8_t *test_pkt;
   uint16_t num_cores;
   uint16_t pkt_size;
-  uint16_t copy_len;
+  uint16_t pkt_size_no_crc;
   uint16_t cur_core_ind;
 };
 
