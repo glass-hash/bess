@@ -63,15 +63,15 @@ void RteVPort::InitDriver() {}
 void RteVPort::DeInit() {
   LOG(INFO) << "Entered RteVPort::DeInit";
   if (shared_rings) {
-    for(int i = 0; i < num_cores; i++) {
-        rte_ring_free(shared_rings[i]);
+    for (int i = 0; i < num_cores; i++) {
+      rte_ring_free(shared_rings[i]);
     }
     free(shared_rings);
   }
 
   if (mempools) {
-    for(int i = 0; i < num_cores; i++) {
-        rte_mempool_free(mempools[i]);
+    for (int i = 0; i < num_cores; i++) {
+      rte_mempool_free(mempools[i]);
     }
     free(mempools);
   }
@@ -87,7 +87,7 @@ uint8_t *generate_pkt(uint16_t pkt_size) {
     std::cerr << "Failed to allocate memory from malloc" << std::endl;
     exit(0);
   }
-  uint16_t pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN; // no crc
+  uint16_t pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN;  // no crc
 
   // Setup packet headers
   struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)pkt_buf;
@@ -135,44 +135,45 @@ uint8_t *generate_pkt(uint16_t pkt_size) {
 CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   num_cores = arg.num_cores();
   pkt_size = arg.pkt_size();
-  pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN; // no crc
+  pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN;  // no crc
   cur_core_ind = 0;
   const unsigned flags = 0;
   const unsigned ring_size = 1024;
   const unsigned pool_size = 1024;
   const unsigned priv_data_sz = 0;
   CommandResponse err;
-  shared_rings = (struct rte_ring **) malloc(num_cores * sizeof(struct rte_ring *));
-  if(shared_rings == NULL) {
-      LOG(FATAL) << "Memory allocation failed";
-      return CommandFailure(ENOMEM, "shared_rings memory allocation failed");
+  shared_rings =
+      (struct rte_ring **)malloc(num_cores * sizeof(struct rte_ring *));
+  if (shared_rings == NULL) {
+    LOG(FATAL) << "Memory allocation failed";
+    return CommandFailure(ENOMEM, "shared_rings memory allocation failed");
   }
 
-  mempools = (struct rte_mempool **) malloc(num_cores * sizeof(struct rte_mempool *));
-  if(shared_rings == NULL) {
-      LOG(FATAL) << "Memory allocation failed";
-      return CommandFailure(ENOMEM, "mempools memory allocation failed");
+  mempools =
+      (struct rte_mempool **)malloc(num_cores * sizeof(struct rte_mempool *));
+  if (shared_rings == NULL) {
+    LOG(FATAL) << "Memory allocation failed";
+    return CommandFailure(ENOMEM, "mempools memory allocation failed");
   }
 
-  for(uint16_t i = 0; i < num_cores; i++) {
-      char SHARED_RING_NAME[30];
-      sprintf(SHARED_RING_NAME, "RTE_VPORT_SHARED_RING_%u", i);
-      LOG(INFO) << "Creating ring and mempool for core " << i;
-      shared_rings[i] = rte_ring_create(SHARED_RING_NAME, ring_size,
-                                        rte_socket_id(),
-                                        flags);
-      if(shared_rings[i] == NULL) {
-        return CommandFailure(ENOMEM, "rte_ring_create failed");
-      }
+  for (uint16_t i = 0; i < num_cores; i++) {
+    char SHARED_RING_NAME[30];
+    sprintf(SHARED_RING_NAME, "RTE_VPORT_SHARED_RING_%u", i);
+    LOG(INFO) << "Creating ring and mempool for core " << i;
+    shared_rings[i] =
+        rte_ring_create(SHARED_RING_NAME, ring_size, rte_socket_id(), flags);
+    if (shared_rings[i] == NULL) {
+      return CommandFailure(ENOMEM, "rte_ring_create failed");
+    }
 
-      char MEMPOOL_NAME[30];
-      sprintf(MEMPOOL_NAME, "RTE_VPORT_MEMPOOL_%u", i);
-      mempools[i] = rte_mempool_create(MEMPOOL_NAME, pool_size, pkt_size, 0,
-                         priv_data_sz, NULL, NULL, NULL, NULL, rte_socket_id(),
-                         flags);
-      if(mempools[i] == NULL) {
-        return CommandFailure(ENOMEM, "rte_mempools failed");
-      }
+    char MEMPOOL_NAME[30];
+    sprintf(MEMPOOL_NAME, "RTE_VPORT_MEMPOOL_%u", i);
+    mempools[i] =
+        rte_mempool_create(MEMPOOL_NAME, pool_size, pkt_size, 0, priv_data_sz,
+                           NULL, NULL, NULL, NULL, rte_socket_id(), flags);
+    if (mempools[i] == NULL) {
+      return CommandFailure(ENOMEM, "rte_mempools failed");
+    }
   }
 
   test_pkt = generate_pkt(pkt_size);
@@ -186,7 +187,8 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
 int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)qid;
   (void)max_cnt;
-  bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
+  bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE,
+                                                        pkt_size_no_crc);
   if (!result) {
     LOG(INFO) << "Could not allocate packets";
     return 0;
@@ -207,9 +209,11 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)qid;
   (void)max_cnt;
   void *client_pkts[BURST_SIZE] = {NULL};
-  int ret = rte_ring_dequeue_bulk(shared_rings[0], client_pkts, BURST_SIZE, NULL);
+  int ret =
+      rte_ring_dequeue_bulk(shared_rings[0], client_pkts, BURST_SIZE, NULL);
   if (ret == BURST_SIZE) {
-    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
+    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE,
+                                                          pkt_size_no_crc);
     if (!result) {
       LOG(INFO) << "Could not allocate packets";
       return 0;
@@ -228,10 +232,12 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   void *client_pkts[BURST_SIZE] = {NULL};
   int total_sent = 0;
   // dequeue the packets
-  int ret = rte_ring_dequeue_bulk(shared_rings[cur_core_ind], client_pkts, BURST_SIZE, NULL);
+  int ret = rte_ring_dequeue_bulk(shared_rings[cur_core_ind], client_pkts,
+                                  BURST_SIZE, NULL);
   // if the dequeue was successful, send them on
   if (ret == BURST_SIZE) {
-    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE, pkt_size_no_crc);
+    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE,
+                                                          pkt_size_no_crc);
     if (!result) {
       LOG(INFO) << "Could not allocate packets";
       return 0;
