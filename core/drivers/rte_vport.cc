@@ -137,9 +137,9 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   pkt_size = arg.pkt_size();
   pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN;  // no crc
   cur_core_ind = 0;
-  const unsigned flags = 0;
+  // As per DPDK docs, optimum ring size is 2^n and pool size is 2^n - 1
   const unsigned ring_size = 1024;
-  const unsigned pool_size = 1024;
+  const unsigned pool_size = 1023;
   const unsigned priv_data_sz = 0;
   CommandResponse err;
   shared_rings =
@@ -161,7 +161,7 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
     sprintf(SHARED_RING_NAME, "RTE_VPORT_SHARED_RING_%u", i);
     LOG(INFO) << "Creating ring and mempool for core " << i;
     shared_rings[i] =
-        rte_ring_create(SHARED_RING_NAME, ring_size, rte_socket_id(), flags);
+        rte_ring_create(SHARED_RING_NAME, ring_size, rte_socket_id(), RING_F_SP_ENQ | RING_F_SC_DEQ);
     if (shared_rings[i] == NULL) {
       return CommandFailure(ENOMEM, "rte_ring_create failed");
     }
@@ -170,7 +170,7 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
     sprintf(MEMPOOL_NAME, "RTE_VPORT_MEMPOOL_%u", i);
     mempools[i] =
         rte_mempool_create(MEMPOOL_NAME, pool_size, pkt_size, 0, priv_data_sz,
-                           NULL, NULL, NULL, NULL, rte_socket_id(), flags);
+                           NULL, NULL, NULL, NULL, rte_socket_id(), MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
     if (mempools[i] == NULL) {
       return CommandFailure(ENOMEM, "rte_mempools failed");
     }
@@ -232,7 +232,7 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   void *client_pkts[BURST_SIZE] = {NULL};
   int total_sent = 0;
   // dequeue the packets
-  int ret = rte_ring_dequeue_bulk(shared_rings[cur_core_ind], client_pkts,
+  int ret = rte_ring_sc_dequeue_bulk(shared_rings[cur_core_ind], client_pkts,
                                   BURST_SIZE, NULL);
   // if the dequeue was successful, send them on
   if (ret == BURST_SIZE) {
