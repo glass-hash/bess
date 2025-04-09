@@ -82,4 +82,6 @@ message VPortArg {
 message RteVPortArg {
   uint32 num_cores = 1;
   uint32 pkt_size = 2;
+  uint32 tbf_rate = 3;
+  uint32 tbf_burst = 4;
 }

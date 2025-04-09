@@ -54,6 +54,7 @@ struct rte_ether_addr src_mac = {{0xb4, 0x96, 0x91, 0xa4, 0x02, 0xe9}};
 struct rte_ether_addr dst_mac = {{0xb4, 0x96, 0x91, 0xa4, 0x04, 0x21}};
 
 #define BURST_SIZE 32
+#define NSEC_PER_SEC 1000000000L
 
 struct rte_ring **shared_rings = NULL;
 struct rte_mempool **mempools = NULL;
@@ -132,10 +133,49 @@ uint8_t *generate_pkt(uint16_t pkt_size) {
   return pkt_buf;
 }
 
+static inline uint64_t get_ns(void) {
+  struct timespec ts;
+  // Get current time using CLOCK_MONOTONIC
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  // Convert to nanoseconds
+  uint64_t ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+  return ns;
+}
+
+void RteVPort::RatePrecompute() {
+  uint64_t factor = NSEC_PER_SEC;
+  mult = 1;
+  shift = 0;
+  if (tbf_rate <= 0)
+    return;
+
+  for (;;) {
+    mult = factor / tbf_rate;
+    if (mult & (1U << 31) || factor & (1ULL << 63))
+      break;
+    factor <<= 1;
+    (shift)++;
+  }
+}
+
 CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
   num_cores = arg.num_cores();
   pkt_size = arg.pkt_size();
+  pkt_size_on_wire = pkt_size + 20;
   pkt_size_no_crc = pkt_size - RTE_ETHER_CRC_LEN;  // no crc
+
+  tbf_rate = ((uint64_t)arg.tbf_rate() * 1000000000) / 8;
+  uint64_t max_burst_size =
+      (uint64_t)((uint64_t)arg.tbf_burst() * 1024 * 1024 * 1024) / 8;
+  buffer = (int64_t)(max_burst_size * NSEC_PER_SEC) / tbf_rate;
+  last_ckpt = get_ns();
+  tokens = buffer;
+  tokens_lc = 0;
+  now = 0;
+
+  RatePrecompute();
+  LOG(INFO) << "Rate is " << tbf_rate << " buffer is " << buffer;
+
   cur_core_ind = 0;
   // As per DPDK docs, optimum ring size is 2^n and pool size is 2^n - 1
   const unsigned ring_size = 1024;
@@ -161,16 +201,17 @@ CommandResponse RteVPort::Init(const bess::pb::RteVPortArg &arg) {
     sprintf(SHARED_RING_NAME, "RTE_VPORT_SHARED_RING_%u", i);
     LOG(INFO) << "Creating ring and mempool for core " << i;
     shared_rings[i] =
-        rte_ring_create(SHARED_RING_NAME, ring_size, rte_socket_id(), RING_F_SP_ENQ | RING_F_SC_DEQ);
+        rte_ring_create(SHARED_RING_NAME, ring_size, rte_socket_id(),
+                        RING_F_SP_ENQ | RING_F_SC_DEQ);
     if (shared_rings[i] == NULL) {
       return CommandFailure(ENOMEM, "rte_ring_create failed");
     }
 
     char MEMPOOL_NAME[30];
     sprintf(MEMPOOL_NAME, "RTE_VPORT_MEMPOOL_%u", i);
-    mempools[i] =
-        rte_mempool_create(MEMPOOL_NAME, pool_size, pkt_size, 0, priv_data_sz,
-                           NULL, NULL, NULL, NULL, rte_socket_id(), MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
+    mempools[i] = rte_mempool_create(
+        MEMPOOL_NAME, pool_size, pkt_size, 0, priv_data_sz, NULL, NULL, NULL,
+        NULL, rte_socket_id(), MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
     if (mempools[i] == NULL) {
       return CommandFailure(ENOMEM, "rte_mempools failed");
     }
@@ -233,27 +274,38 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   int total_sent = 0;
   // dequeue the packets
   int ret = rte_ring_sc_dequeue_bulk(shared_rings[cur_core_ind], client_pkts,
-                                  BURST_SIZE, NULL);
-  // if the dequeue was successful, send them on
+                                     BURST_SIZE, NULL);
   if (ret == BURST_SIZE) {
-    bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE,
-                                                          pkt_size_no_crc);
-    if (!result) {
-      LOG(INFO) << "Could not allocate packets";
-      return 0;
-    }
-    // Copy the packets from the application on to the allocated packets
-    for (uint16_t i = 0; i < BURST_SIZE; i++) {
-      bess::Packet *p = pkts[i];
-      char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
-      p->set_data_off(SNBUF_HEADROOM);
-      p->set_total_len(pkt_size_no_crc);
-      p->set_data_len(pkt_size_no_crc);
-      rte_memcpy(ptr, client_pkts[i], pkt_size_no_crc);
+    now = get_ns();
+    tokens_lc = ((now - last_ckpt) < buffer) ? (now - last_ckpt) : buffer;
+    tokens_lc += tokens;
+    if (tokens_lc > buffer)
+      tokens_lc = buffer;
+    int64_t total_size_on_wire = BURST_SIZE * pkt_size_on_wire;
+    tokens_lc -= ((total_size_on_wire * mult) >> shift);
+    // tokens_lc -= (int64_t)(total_size_on_wire * NSEC_PER_SEC) / tbf_rate;
+    if (tokens_lc >= 0) {
+      bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE,
+                                                            pkt_size_no_crc);
+      if (!result) {
+        LOG(INFO) << "Could not allocate packets";
+        return 0;
+      }
+      // Copy the packets from the application on to the allocated packets
+      for (uint16_t i = 0; i < BURST_SIZE; i++) {
+        bess::Packet *p = pkts[i];
+        char *ptr = p->buffer<char *>() + SNBUF_HEADROOM;
+        p->set_data_off(SNBUF_HEADROOM);
+        p->set_total_len(pkt_size_no_crc);
+        p->set_data_len(pkt_size_no_crc);
+        rte_memcpy(ptr, client_pkts[i], pkt_size_no_crc);
+      }
+      total_sent = BURST_SIZE;
+      last_ckpt = now;
+      tokens = tokens_lc;
     }
     // Return the pointers to the mempool
     rte_mempool_put_bulk(mempools[cur_core_ind], client_pkts, BURST_SIZE);
-    total_sent = BURST_SIZE;
   }
   cur_core_ind = (cur_core_ind + 1) % num_cores;
   return total_sent;

@@ -50,7 +50,18 @@ class RteVPort final : public Port {
   uint16_t num_cores;
   uint16_t pkt_size;
   uint16_t pkt_size_no_crc;
+  uint16_t pkt_size_on_wire;
   uint16_t cur_core_ind;
+
+  uint64_t tbf_rate;
+  int64_t buffer;
+  int64_t last_ckpt;
+  int64_t tokens;
+  int64_t tokens_lc;
+  int64_t now;
+  uint32_t mult;
+  uint8_t shift;
+  void RatePrecompute();
 };
 
 #endif  // BESS_DRIVERS_RTE_VPORT_H_
