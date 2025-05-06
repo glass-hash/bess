@@ -1,0 +1,8 @@
+pkt_size = int($PKT_SIZE!'60')
+num_cores = int($NUM_CORES!'1')
+tbf_rate = int($TBF_RATE!'100')
+tbf_burst = int($TBF_BURST!'1')
+
+rte_vport = RteVPort(pkt_size=pkt_size, num_cores=num_cores, tbf_rate=tbf_rate, tbf_burst=tbf_burst)
+pmd_port = PMDPort(pci="17:00.1", num_out_q=1)
+QueueInc(port=rte_vport, qid=0) -> QueueOut(port=pmd_port, qid=0)
