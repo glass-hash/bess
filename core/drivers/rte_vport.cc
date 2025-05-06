@@ -272,19 +272,19 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
   (void)max_cnt;
   void *client_pkts[BURST_SIZE] = {NULL};
   int total_sent = 0;
-  // dequeue the packets
-  int ret = rte_ring_sc_dequeue_bulk(shared_rings[cur_core_ind], client_pkts,
-                                     BURST_SIZE, NULL);
-  if (ret == BURST_SIZE) {
-    now = get_ns();
-    tokens_lc = ((now - last_ckpt) < buffer) ? (now - last_ckpt) : buffer;
-    tokens_lc += tokens;
-    if (tokens_lc > buffer)
-      tokens_lc = buffer;
-    int64_t total_size_on_wire = BURST_SIZE * pkt_size_on_wire;
-    tokens_lc -= ((total_size_on_wire * mult) >> shift);
-    // tokens_lc -= (int64_t)(total_size_on_wire * NSEC_PER_SEC) / tbf_rate;
-    if (tokens_lc >= 0) {
+  now = get_ns();
+  tokens_lc = ((now - last_ckpt) < buffer) ? (now - last_ckpt) : buffer;
+  tokens_lc += tokens;
+  if (tokens_lc > buffer)
+    tokens_lc = buffer;
+  int64_t total_size_on_wire = BURST_SIZE * pkt_size_on_wire;
+  tokens_lc -= ((total_size_on_wire * mult) >> shift);
+  // tokens_lc -= (int64_t)(total_size_on_wire * NSEC_PER_SEC) / tbf_rate;
+  if (tokens_lc >= 0) {
+    // dequeue the packets
+    int ret = rte_ring_sc_dequeue_bulk(shared_rings[cur_core_ind], client_pkts,
+                                       BURST_SIZE, NULL);
+    if (likely(ret == BURST_SIZE)) {
       bool result = current_worker.packet_pool()->AllocBulk(pkts, BURST_SIZE,
                                                             pkt_size_no_crc);
       if (!result) {
@@ -303,9 +303,9 @@ int RteVPort::RecvPackets(queue_t qid, bess::Packet **pkts, int max_cnt) {
       total_sent = BURST_SIZE;
       last_ckpt = now;
       tokens = tokens_lc;
+      // Return the pointers to the mempool
+      rte_mempool_put_bulk(mempools[cur_core_ind], client_pkts, BURST_SIZE);
     }
-    // Return the pointers to the mempool
-    rte_mempool_put_bulk(mempools[cur_core_ind], client_pkts, BURST_SIZE);
   }
   cur_core_ind = (cur_core_ind + 1) % num_cores;
   return total_sent;
